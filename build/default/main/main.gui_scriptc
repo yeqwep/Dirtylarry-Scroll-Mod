@@ -1,0 +1,840 @@
+
+�
+�v------------------------------------------------------------------------------------------------
+-- Local variable
+------------------------------------------------------------------------------------------------
+-- マスク、スクロールエリア、ボックスの大きさや位置を入れる変数
+local m = nil -- マスクの大きさ
+local s = nil -- スクロールエリアの大きさ
+local ks = nil -- 仮想スクロールエリアの大きさ
+local b = nil -- ボックスの大きさ
+local bh = nil -- ボックスの半分
+local bm = nil -- ボックス余白を含めたボックスの間隔
+local visb = 0 -- ボックスの可視位置
+local invisb = 450 -- ボックスの不可視位置
+local sbx = 20 -- スクロールバーの横幅
+-- 表示範囲を決めるための変数
+local view_num = nil -- 今どこにいるか
+local next_view = nil -- このy座標より下にスクロールした時最上部のboxが最下部に移動する
+local prev_view = nil -- このy座標より上にスクロールした時最下部のboxが最上部に移動する
+-- ボックス指定用変数
+local box_num = 5 -- ボックスの数、用意したテンプレートの数を入力する
+local visible_box = 3 -- 表示するボックスの数
+local box = {} -- 表示ボックスのIDテーブル
+local l_num = nil -- 書き換え対象のボックス
+-- ハッシュ参照データ。ここに記入したハッシュはboxテンプレートの各ノードを参照するために必要
+local list_box = '/box'
+local list_texture = {'/picture', '/team_icon', '/element_icon'}
+local list_text = {'/NAME', '/HP', '/SP', '/LUCK', '/ATK', '/DEX', '/AGI', '/rank', '/EXP', '/EXP_max', '/listID'}
+-- 保存されたデータ
+local d_num = nil -- 保存データの数
+local listdata = {} -- すべてのデータが保存されたテーブル
+-- スクロール処理していいか
+local scok = true
+------------------------------------------------------------------------------------------------
+-- Sample for add parameter data
+------------------------------------------------------------------------------------------------
+-- 参照用データ
+local paradata = {
+	{1, 1, 1, 'a_san', 1, 2, 3, 4, 5, 6, 7, 8, 9},
+	{2, 2, 2, 'b_kun', 41, 51, 13, 12, 115, 14, 16, 17, 11},
+	{2, 2, 2, 'c_chan', 1, 1, 1, 1, 1, 1, 1, 1, 1}
+}
+
+-- ボックス追加パラメータ設定
+local function para(self)
+	local para = {}
+	local t = math.random(1,3)
+	for i, p in ipairs(list_text) do
+		table.insert(para, i, paradata[t][i + 3])
+	end
+	para[11] = d_num
+	return para
+end
+------------------------------------------------------------------------------------------------
+-- Dirty Larry property
+------------------------------------------------------------------------------------------------
+-- ノードが有効か判定
+function isenabled(self, node)
+	local parent = gui.get_parent(node) --親が無かったらnil。あったら名前を返す
+	if parent then
+		return isenabled(self, parent) --親の名前を返す
+	end
+	return gui.is_enabled(node) --ノードが有効ならtrueを返す。無効ならfalseを返す
+end
+-- 触った（action_id）の名前があるかどうか判定
+local function safe_get_node(node)
+	--ノードがあるか、あったら名前を返す
+	if
+		pcall(
+			function()
+				gui.get_node(node)
+			end
+		)
+	 then
+		return gui.get_node(node)
+	else
+		return nil
+	end
+end
+-- 触ったノードが有効か　有効なら触ったノード名を返す
+local function hit_test(self, node, action_id, action)
+	if not isenabled(self, node) then
+		return false
+	end
+	local hit = gui.pick_node(node, action.x, action.y)
+	local touch = action_id == hash('touch')
+	return touch and hit
+end
+------------------------------------------------------------------------------------------------
+-- rewrite,scrolling,scroll,add,remove
+------------------------------------------------------------------------------------------------
+-- 対象のボックスに値代入
+local function write(self, bn, ln)
+	for i, p in ipairs(list_texture) do
+		-- gui.set_texture(box[d_num][p], texture))
+	end
+	for i, p in ipairs(list_text) do
+		-- ボックスの各テキストノードにリストデータを代入
+		gui.set_text(gui.get_node(box[bn] .. p), listdata[ln][i])
+	end
+end
+-- 全ボックス更新
+local function allwrite(self)
+	local n = 0 -- box番号用
+	local f = 0 -- 最初のboxに対応するリストデータ
+	local l = 0 -- 最後のboxに対応するリストデータ
+	if d_num <= box_num then -- すべてのboxが見えるまで
+		f = 1
+		l = d_num
+		print('in box')
+	elseif d_num > box_num and d_num >= (box_num + view_num - 1) then
+		f = view_num
+		l = box_num + view_num - 1
+		print('box out')
+	elseif d_num < (box_num + view_num - 1) then
+		f = view_num
+		l = d_num
+		print('full')
+	end
+
+	for j = f, l do
+		n = n + 1 -- 更新対象ボックス
+		for i, p in ipairs(list_texture) do
+			-- gui.set_texture(box[d_num][p], texture))
+		end
+		for i, p in ipairs(list_text) do
+			-- pprint(listdata[j][i])
+			gui.set_text(gui.get_node(box[n] .. p), listdata[j][i])
+		end
+	end
+end
+-- 最初と最後のボックスを移動させる
+local function box_move(self, scroll)
+	if d_num >= box_num then
+		if scroll.dy >= next_view and view_num < (d_num - (visible_box + 1)) then
+			view_num = view_num + 1
+			prev_view = next_view
+			next_view = next_view + bm
+			local po = vmath.vector3(0, ((view_num + visible_box) * -bm), 0)
+			l_num = box_num + view_num - 1
+			-- ボックス入れ替え
+			gui.set_position(gui.get_node(box[1] .. list_box), po)
+			table.insert(box, box_num + 1, box[1])
+			table.remove(box, 1)
+			-- 一番最後のボックスを書き換え
+			write(self, box_num, l_num)
+			print('move1')
+		elseif scroll.dy < next_view and view_num == (d_num - visible_box) then
+			view_num = view_num - 1
+			next_view = prev_view
+			prev_view = prev_view - bm
+			local po = vmath.vector3(0, ((view_num - 1) * -bm), 0)
+			l_num = view_num
+			-- ボックス入れ替え
+			gui.set_position(gui.get_node(box[box_num] .. list_box), po)
+			table.insert(box, 1, box[box_num])
+			table.remove(box, box_num + 1)
+			-- 一番最初のボックスを書き換え
+			write(self, 1, l_num)
+			print('move2')
+		elseif scroll.dy < prev_view and view_num > 1 then
+			view_num = view_num - 1
+			next_view = prev_view
+			prev_view = prev_view - bm
+			local po = vmath.vector3(0, ((view_num - 1) * -bm), 0)
+			l_num = view_num
+			-- ボックス入れ替え
+			gui.set_position(gui.get_node(box[box_num] .. list_box), po)
+			table.insert(box, 1, box[box_num])
+			table.remove(box, box_num + 1)
+			-- 一番最初のボックスを書き換え
+			write(self, 1, l_num)
+			print('move3')
+		end
+	end
+	-- print('d_num'..d_num)
+	-- print('view_num'..view_num)
+	-- print('prev'..prev_view)
+	-- print('next'..next_view)
+	-- print('dy'..scroll.dy)
+	-- pprint(box)
+end
+-- スクロール移動反映
+local function scrolling(self, node, parent, scroll)
+	if parent then
+		local ms = gui.get_size(parent)
+		local min_y = 0
+		local max_y = math.max(0, scroll.oh - ms.y)
+
+		if scroll.dy < min_y then
+			scroll.dy = min_y
+		end
+		if scroll.dy > max_y then
+			scroll.dy = max_y
+		end
+		-- スクロールバーの位置反映
+		if scroll.bar_y and max_y > 0 then
+			local delta_y = scroll.dy / max_y
+			local bar_s = gui.get_size(scroll.bar_y)
+			local p = vmath.vector3(ms.x, -(ms.y - bar_s.y) * delta_y, 0)
+			gui.set_position(scroll.bar_y, p)
+		elseif scroll.bar_y and max_y == 0 then
+			gui.set_position(scroll.bar_y, vmath.vector3(ms.x, 0, 0))
+		end
+	end
+	-- 前後ボックス移動
+	box_move(self, scroll)
+	-- スクロールの位置反映
+	gui.set_position(node, vmath.vector3(scroll.ox, scroll.oy + scroll.dy, 0))
+end
+-- 最初にbox追加
+local function init_add_box(self)
+	for i = 1, box_num, 1 do
+		local b = 'box' .. tostring(i)
+		box[i] = b
+	end
+end
+-- box追加
+local function add_box(self)
+	scok = false
+	-- データ数+1
+	d_num = d_num + 1
+	-- 追加するデータ
+	local para = para(self)
+	table.insert(listdata, para)
+	-- データ更新書き換え
+	if d_num <= box_num then -- データ数がボックスの数埋まるまで
+		local pos = vmath.vector3(visb, (-bm * (d_num - 1)), 0)
+		gui.set_position(gui.get_node(box[d_num] .. list_box), pos)
+		write(self, d_num, d_num)
+	else -- ボックスの数よりデータ数が増えたとき最後のボックスを書き換え
+		l_num = box_num + view_num - 1
+		write(self, box_num, l_num)
+	end
+	-- スクロールエリアの位置とバーを更新
+	if d_num >= visible_box + 1 then
+		local node = gui.get_node('scrollarea')
+		local parent = gui.get_parent(node)
+		s = gui.get_size(node)
+		m = gui.get_size(parent)
+		s.y = s.y + bm
+		gui.set_size(node, s)
+		gui.set_size(gui.get_node('scrollarea_bary'), vmath.vector3(sbx, m.y ^ 2 / s.y, 0))
+		self.scrollarea.oh = s.y
+		scrolling(self, node, parent, self.scrollarea)
+	end
+	scok = true
+end
+-- box削除
+local function remove_box(self)
+	scok = false
+	if d_num > 0 then
+		-- 最後のデータを消す
+		table.remove(listdata, d_num)
+		d_num = d_num - 1
+	-- スクロールエリアの位置とバーを更新
+		if d_num >= visible_box then
+			local node = gui.get_node('scrollarea')
+			local parent = gui.get_parent(node)
+			s = gui.get_size(node)
+			m = gui.get_size(parent)
+			s.y = s.y - bm -- スクロールエリアをボックス１個分減らす
+			-- サイズ変更を反映
+			gui.set_size(node, s)
+			gui.set_size(gui.get_node('scrollarea_bary'), vmath.vector3(sbx, m.y ^ 2 / s.y, 0))
+			self.scrollarea.oh = s.y
+			scrolling(self, node, parent, self.scrollarea)
+		end
+
+		-- データがボックスの数より少ない時、非表示
+		if d_num < box_num then
+			local pos = vmath.vector3(invisb, (-bm * d_num), 0)
+			gui.set_position(gui.get_node(box[d_num + 1] .. list_box), pos)
+		end
+
+		allwrite(self)
+	end
+	scok = true
+end
+------------------------------------------------------------------------------------------------
+-- Dirty Larry scroll Mod
+------------------------------------------------------------------------------------------------
+-- スクロールエリアを動かす
+local function sc(node_str, action_id, action, scroll, cb)
+	local node = gui.get_node(node_str) --スクロールエリア
+	local parent = gui.get_parent(node) --スクロールエリアの親
+	local touch = action_id == hash('touch') --action_idの種類が左クリックの時、記録
+	local wup = action_id == hash('wup') --action_idの種類がホイールアップの時、記録
+	local wdown = action_id == hash('wdown') --action_idの種類がホイールダウンの時、記録
+
+	-- local scroll = self.scrollarea
+	local scroll = scroll
+	-- scrollに何も入ってない時、いろいろ設定する
+	if not scroll then
+		local p = gui.get_position(node)
+		scroll = {drag = false, started = false, dy = 0, ox = p.x, oy = p.y, ow = s.x, oh = s.y}
+		-- scrollarea_baryの用意しておくとself.scrollareaに追加される
+		scroll.bar_y = safe_get_node(node_str .. '_bary') --baryくっつけてあったら返す
+	end
+	if scroll.oh ~= s.y then
+		scroll.oh = s.y
+	end
+	-- 触ったノードの名前と親を記録（ある場合）
+	local hit = false
+	if parent then
+		hit = hit_test(self, parent, action_id, action)
+	else
+		hit = hit_test(self, node, action_id, action)
+	end
+	-- スクロール移動の判定
+	local consumed_input = false
+	-- スクロール移動計算
+	if touch then
+		-- クリック離したらスクロールとドラッグの終わり
+		if scroll.drag and action.released then
+			-- スクロールしていてエリアをちょっとでも動かした時ドラッグの始まり
+			-- エリア内クリックしたらスクロールの始まり
+			-- potentially start scroll/drag
+			scroll.drag = false
+			scroll.started = false
+			consumed_input = true
+		elseif hit and action.pressed then
+			scroll.started = true
+			action.dx = 0
+			action.dy = 0
+		elseif scroll.started and hit and (action.dy ~= 0) then
+			scroll.drag = true
+			scroll.started = false
+			consumed_input = true
+		end
+
+		-- ドラッグしている時　スクロールの差分を計算
+		if scroll.drag then
+			consumed_input = true
+			scroll.dy = scroll.dy + action.dy
+
+			scrolling(self, node, parent, scroll)
+		end
+	elseif wup or wdown then
+		consumed_input = true
+		if wup then
+			scroll.dy = scroll.dy - bh
+		elseif wdown then
+			scroll.dy = scroll.dy + bh
+		end
+
+		scrolling(self, node, parent, scroll)
+	end
+
+	--スクロールエリア内を触っていて、まだスクロール移動していない時
+	if not consumed_input and ((touch and hit) or not touch) then
+		cb(self, action_id, action)
+	end
+
+	return scroll
+end
+------------------------------------------------------------------------------------------------
+-- init and on_input
+------------------------------------------------------------------------------------------------
+-- 最初に実行
+function init(self)
+	math.randomseed(os.time())
+	msg.post('.', 'acquire_input_focus')
+	-- スクロールエリア、ボックス、マスクの位置大きさ取得
+	m = gui.get_size(gui.get_node('mask'))
+	s = gui.get_size(gui.get_node('scrollarea'))
+	b = gui.get_size(gui.get_node('box1/box'))
+	bh = b.y / 2 -- ボックスの半分
+	bm = b.y + 5 -- ボックス余白を含めたボックスの間隔
+	-- スクロールバーの大きさ設定
+	gui.set_size(gui.get_node('scrollarea_bary'), vmath.vector3(sbx, m.y ^ 2 / s.y, 0))
+
+	d_num = 0 -- データの数
+	l_num = 0
+	-- ボックスの表示域
+	view_num = 1
+	next_view = bh + bm
+	prev_view = bh - bm
+
+	scok = true
+	-- ボックステンプレートの名前を追加
+	init_add_box(self)
+end
+
+-- 入力時実行
+function on_input(self, action_id, action)
+	if scok then
+		self.scrollarea =
+			sc(
+			'scrollarea',
+			action_id,
+			action,
+			self.scrollarea,
+			function(self, action_id, action)
+				-- ボタンの範囲内でクリックした時
+				if action_id == hash('touch') and action.released then
+					for i, p in ipairs(box) do
+						if gui.pick_node(gui.get_node(p .. list_box), action.x, action.y) then
+							print('push' .. tostring(p))
+						end
+					end
+				end
+				for i, p in ipairs(box) do
+					local ob = gui.get_node(p .. list_box)
+					if gui.pick_node(ob, action.screen_x, action.screen_y) then
+						gui.animate(ob, 'color.w', 0.7, go.EASING_OUTQUAD, 0.1)
+					else
+						gui.animate(ob, 'color.w', 0.4, go.EASING_OUTQUAD, 0.1)
+					end
+				end
+			end
+		)
+
+		if action_id == hash('touch') and action.pressed then
+			if gui.pick_node(gui.get_node('add'), action.x, action.y) then
+				add_box(self)
+			elseif gui.pick_node(gui.get_node('remove'), action.x, action.y) then
+				remove_box(self)
+			end
+		end
+
+		if action_id == hash('space') and action.pressed then
+			msg.post('@system:', 'toggle_profile')
+		end
+		if action_id == hash('keyz') and action.pressed then
+			for i, p in ipairs(box) do
+				gui.set_enabled(gui.get_node(p .. list_box), false)
+			end
+		end
+		if action_id == hash('keyx') and action.pressed then
+			for i, p in ipairs(box) do
+				gui.set_enabled(gui.get_node(p .. list_box), true)
+			end
+		end
+	end
+end
+/main/main.gui_script�JLJ =/main/main.gui_script� U+4  6  9) ) B6 -  BX	�6 9	 
+ - 8 8BER�- >L ���insert
+tableipairsrandom	mathlist_text paradata d_num self  para t   i 	p  	 �   &86  9 B  X�6    D 6  9 D is_enabledisenabledget_parentguiself  node  parent 
+ 8   D6   9  -  B K   �get_nodeguinode  v  @6  3 B  X�6 9  2  �D X�+  2  �L 2  �K  get_nodegui 
+pcall						node   �   LO6     B  X�+ L 6 9 99B6 ' B X�+ X�+  X� L 
+touch	hashyxpick_nodeguiisenabledself  node  action_id  action  hit touch  �  r[6  -  BX �ER�6  - BX�6 96	 9		-
+ 8
+
+ &
+
+B	-
+ 8
+
+8
+
+BER�K  ����get_nodeset_textguiipairslist_texture list_text box listdata self  bn  ln    i  p     i p   � M�e)  )  )  -  -  X�) -  6  ' BX �-  -  X�-  - -    X	�- - -   6  ' BX�-  - -    X�- -  6  ' B  ) M� 6 -	 BX �ER�6 -	 BX�6 96 9- 8 &B- 88BER�O�K  ��	�����get_nodeset_textguiipairs	fullbox outin box
+print	
+
+
+
+d_num box_num view_num list_texture list_text box listdata self  Nn Lf Kl J-  j   i  p     i p   �	 ���1-  -  Xƀ9 -  XA�- -  -  ! X:�-  . - . - -  . 6 9)  - -  -  ")  B- -   . 6 96 9- :-	 &B B6 9- -  - :B6 9- ) B-
+   - - B6	 '
+ BX��9 -  X>�- -  - ! X8�-  . - . - - !. 6 9)  -  -  ")  B- . 6 96 9- - 8-	 &B B6 9- ) - - 8B6 9- -  B-
+   ) - B6	 ' BX?�9 -  X;�- )  X7�-  . - . - - !. 6 9)  -  -  ")  B- . 6 96 9- - 8-	 &B B6 9- ) - - 8B6 9- -  B-
+   ) - B6	 ' BK  ��
+�	��������
+move3
+move2
+move1
+printremoveinsert
+tableget_nodeset_positionguivector3
+vmathdy											
+
+
+
+
+
+
+
+          !!############$$$$$$$$%%%%%%'''''(((1d_num box_num next_view view_num visible_box prev_view bm l_num box list_box write self  �scroll  �po $%po C$po @$ � R��  X?�6  9 B)  6 9)  99	!	B9 X�=9 X�=9  X�)   X�9#6  99	B6	 9			9
+
+99! ")  B	6
+  9
+
+9	 B
+X�9  X�	  X
+�6  996	 9			9
+
+)  )  B	 A-     B6  9 6 9	999	 	)	  B AK  �oyoxset_positionxvector3
+vmath
+bar_ydyyohmax	mathget_sizegui 			
+box_move self  Snode  Sparent  Sscroll  Sms ;min_y :max_y 3delta_y bar_s p 
+ �  2�) -  ) M�'  6  B&- <O�K  ��tostringboxbox_num box self  	 	 	i b  � 
+w��1  -  . -   B6  9-  B- -  X�6 9- -  -  ")  B6 96 9- - 8- &B B-	   - - BX
+�- -   .
+ -	   - -
+ B- -   X:�6 9' B6 9 B6 9	 B. 6 9	 B. - - 9
+-  =
+6 9 - B6 96 9' B6 9- - 9
+)	 %	-	 9	
+	#	)	  B A9 - 9
+=-     9 B1  K  �����������	��� ���ohscrollarea_baryset_sizeyget_sizeget_parentscrollareaget_nodeset_positionguivector3
+vmathinsert
+table										
+
+
+
+
+
+
+
+
+
+
+
+scok d_num para listdata box_num visb bm box list_box write l_num view_num visible_box s m sbx scrolling self  xpara ppos node %6parent 2 � 	j��1  - )   Xc�6  9- - B-  . - -  X:�6 9' B6 9 B6 9 B. 6 9 B. - - 9- !=6 9 - B6 96 9'	 B6
+ 9- - 9) %- 9#)  B A9 - 9=-     9 B- -	  X�6
+ 9-
+ -  - ")  B6 96 9- -  8- &B B-   B1  K  ����� ���������set_positionohvector3
+vmathscrollarea_baryset_sizeyget_sizeget_parentscrollareaget_nodeguiremove
+table				
+
+
+
+
+scok d_num listdata visible_box s m bm sbx scrolling box_num invisb box list_box allwrite self  knode 6parent 2pos ? �	 ���H6  9  B6  9 B6 ' B X�+ X�+ 6 '	 B X�+ X	�+ 6	 '
+ B		 X	�+	 X
+�+	 
+  
+ X�6  9 B5 9	=
+9=-  9	=-  9=
+ -   ' &B=
+9
+-  9 X�-  9=
++   X�- 6    B X�- 6    B +   X4�9
+  X	�9  X�+ =
++ =
++ X�  X
+�9  X�+ =
+)  =)  =X�9
+  X
+�  X�9  X�+ =
++ =
++ 9
+  X$�+ 9
+9 =
+- 6   
+ BX�  X� 	 X�+   X�9
+- !=
+X� 	 X�9
+-  =
+- 6   
+ B  X�  X�  X�  X� 6   BL
+ �����dydxpressedstartedreleased	drag	self
+_bary
+bar_yohowoyyoxx dy started	dragget_position
+wdownwup
+touch	hashget_parentget_nodegui 
+
+##$$%%&&&&&''(()))********++,,-1112333355555567777899:::::;;<<<<??????CCCCCCCCDDDDDGs safe_get_node hit_test scrolling bh node_str  �action_id  �action  �scroll  �cb  �node �parent �touch �wup �wdown �scroll �p hit nconsumed_input \ � N��6  96 9B A 6 9' ' B6 9	6 9
+' B A .  6 9	6 9
+' B A . 6 9	6 9
+' B A . - 9 . - 9. 6 96 9
+' B6 9- -  9) %- 9#)  B A0 0 0 - -  .	 - - !.
+ 1 -   BK   ��������	�
+����vector3
+vmathscrollarea_baryset_sizeybox1/boxscrollarea	maskget_nodeget_sizeguiacquire_input_focus.	postmsg	timeosrandomseed	math
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+m s b bh bm sbx d_num l_num view_num next_view prev_view scok init_add_box self  O � J��6  ' B X�9  X�6 -  BX�6 96	 9		
+ - &
+
+B	9
+9B  X	�6	 '	
+ 6
+  B
+&	
+	BER�6 -  BX!�6 9	 -
+ &	
+	B6	 9		
+ 99B	 	 X
+
+�6	 9		
+ ' *  6 9* B	X		�6	 9		
+ ' * 6 9* B	ER�K    EASING_OUTQUADgocolor.wanimatescreen_yscreen_xtostring	push
+printyxget_nodepick_nodeguiipairsreleased
+touch	hash͙���̙���̙������̙����				
+
+
+
+
+
+		box list_box self  Kaction_id  Kaction  K  i p  $ $ $i !p  !ob  � n��2-    Xj�- '    9  3 B=  6 ' B X �9  X�6 96 9' B9	9
+B  X�-   BX�6 96 9' B9	9
+B  X�-   B6 ' B X�9  X�6 9' ' B6 ' B X�9  X�6 - BX
+�6 96	 9		
+ - &
+
+B	+
+ BER�6 ' B X�9  X�6 - BX
+�6 96	 9		
+ - &
+
+B	+
+ BER�K  �!���� �	keyxset_enabledipairs	keyztoggle_profile@system:	postmsg
+spaceremoveyxaddget_nodepick_nodeguipressed
+touch	hash scrollarea   $$$$$$$$%%%%%''''''''(((())))))))))((,,,,,,,,----..........--2scok sc box list_box add_box remove_box self  oaction_id  oaction  oI  i 
+p  
+  i 
+p  
+ � #  )� �,  )  )�) ,	 ) ) 4  +  '  5 5 +  4  + 4 5 >5 >5 >3 3 7 3	 3
+ 3 3 3 3 3 3 3  3! 3" 7" 3" 7" 2  �K  on_input 	init           isenabled    c_chan  
+b_kun)3s  
+a_san	  
+/NAME/HP/SP
+/LUCK	/ATK	/DEX	/AGI
+/rank	/EXP/EXP_max/listID  /picture/team_icon/element_icon	/box               $ $ % % & & ' 3 > 8 M V c � � � � � b}g����m (s  (ks  (b  (bh  (bm  (visb 'invisb &sbx %view_num $next_view  $prev_view  $box_num #visible_box "box !l_num  list_box list_texture list_text d_num listdata scok paradata para safe_get_node hit_test write allwrite box_move scrolling 
+init_add_box 	add_box remove_box sc   "�JLJ=/main/main.gui_script� U+4  6  9) ) B6 -  BX	�6 9
+  - 8 8BER�- >L ���insert
+tableipairsrandom	mathlist_text paradata d_num self  para t   i 	p  	 �   &86  9 B  X�6    D 6  9 D is_enabledisenabledget_parentguiself  node  parent 
+ 8   D6   9  -  B K   �get_nodeguinode  v  @6  3 B  X�6 9  2  �D X�+  2  �L 2  �K  get_nodegui 
+pcall						node   � 	  LO6     B  X�+ L 6 9 99B6 ' B X�+ X�+  X� L 
+touch	hashyxpick_nodeguiisenabledself  node  action_id  action  hit touch  �  r[6  -  BX �ER�6  - BX�6 96
+ 9
+
+- 8 &B
+- 88BER�K  ����get_nodeset_textguiipairslist_texture list_text box listdata self  bn  ln    i  p     i p   � M�e)  )  )  -  -  X�) -  6  ' BX �-  -  X�-  - -    X	�- - -   6  ' BX�-  - -    X�- -  6  ' B  ) M� 6 -
+ BX �ER�6 -
+ BX�6 96 9- 8 &B- 88BER�O�K  ��	�����get_nodeset_textguiipairs	fullbox outin box
+print	
+
+
+
+d_num box_num view_num list_texture list_text box listdata self  Nn Lf Kl J-  j   i  p     i p   �	 	���1-  -  Xƀ9 -  XA�- -  -  ! X:�-  . - . - -  . 6 9)  - -  -  ")  B- -   . 6 96 9- :-	 &B B6 9- -  - :B6 9- ) B-
+   - - B6	 '
+ BX��9 -  X>�- -  - ! X8�-  . - . - - !. 6 9)  -  -  ")  B- . 6 96 9- - 8-	 &B B6 9- ) - - 8B6 9- -  B-
+   ) - B6	 ' BX?�9 -  X;�- )  X7�-  . - . - - !. 6 9)  -  -  ")  B- . 6 96 9- - 8-	 &B B6 9- ) - - 8B6 9- -  B-
+   ) - B6	 ' BK  ��
+�	��������
+move3
+move2
+move1
+printremoveinsert
+tableget_nodeset_positionguivector3
+vmathdy											
+
+
+
+
+
+
+
+          !!############$$$$$$$$%%%%%%'''''(((1d_num box_num next_view view_num visible_box prev_view bm l_num box list_box write self  �scroll  �po $%po C$po @$ � R��  X?�6  9 B)  6 9)  9	9
+!	
+	B9 X�=9 X�=9  X�)   X�9#6  99
+B6	 9			9
+99! ")  B	6
+  9
+
+9	 B
+X�9  X�	  X
+�6  99	6
+ 9
+	
+9
+)  )  B
+ A-     B6  9 6 9	9	9
+9 
+
+)  B AK  �oyoxset_positionxvector3
+vmath
+bar_ydyyohmax	mathget_sizegui 			
+box_move self  Snode  Sparent  Sscroll  Sms ;min_y :max_y 3delta_y bar_s p 
+ � 	 2�) -  ) M�'  6  B&- <O�K  ��tostringboxbox_num box self  	 	 	i b  � w��1  -  . -   B6  9-  B- -  X�6 9- -  -  ")  B6 96 9- - 8- &B B-	   - - BX
+�- -   .
+ -	   - -
+ B- -   X:�6 9' B6 9 B6 9	 B. 6 9	 B. - - 9
+-  =
+6 9 - B6 96 9' B6 9-	 -
+ 9
+
+
+) %
+
+- 9
+#
+
+)  B A9 - 9
+=-     9	 B1  K  �����������	��� ���ohscrollarea_baryset_sizeyget_sizeget_parentscrollareaget_nodeset_positionguivector3
+vmathinsert
+table										
+
+
+
+
+
+
+
+
+
+
+
+scok d_num para listdata box_num visb bm box list_box write l_num view_num visible_box s m sbx scrolling self  xpara ppos node %6parent 2 � j��1  - )   Xc�6  9- - B-  . - -  X:�6 9' B6 9 B6 9 B. 6 9 B. - - 9- !=6 9 - B6 96 9'	 B6
+ 9- -	 9		)
+ %	
+	-
+ 9
+
+#	
+	)
+  B A9 - 9=-     9 B- -	  X�6
+ 9-
+ -  - ")  B6 96 9- -  8- &B B-   B1  K  ����� ���������set_positionohvector3
+vmathscrollarea_baryset_sizeyget_sizeget_parentscrollareaget_nodeguiremove
+table				
+
+
+
+
+scok d_num listdata visible_box s m bm sbx scrolling box_num invisb box list_box allwrite self  knode 6parent 2pos ? �	 ���H6  9  B6  9 B6 '	 B X�+ X�+ 6 '
+ B X�+ X	�+ 6	 ' B		 X	�+	 X
+�+	 
+  
+ X�6  9 B5 9	=
+9=-  9	=-  9=
+ -   ' &B=
+9
+-  9 X�-  9=
++   X�- 6    B X�- 6    B +   X4�9
+  X	�9  X�+ =
++ =
++ X�  X
+�9  X�+ =
+)  =)  =X�9
+  X
+�  X�9  X�+ =
++ =
++ 9
+  X$�+ 9
+9 =
+- 6   
+ BX�  X� 	 X�+   X�9
+- !=
+X� 	 X�9
+-  =
+- 6   
+ B  X�  X�  X�  X� 6   BL
+ �����dydxpressedstartedreleased	drag	self
+_bary
+bar_yohowoyyoxx dy started	dragget_position
+wdownwup
+touch	hashget_parentget_nodegui 
+
+##$$%%&&&&&''(()))********++,,-1112333355555567777899:::::;;<<<<??????CCCCCCCCDDDDDGs safe_get_node hit_test scrolling bh node_str  �action_id  �action  �scroll  �cb  �node �parent �touch �wup �wdown �scroll �p hit nconsumed_input \ � 	N��6  96 9B A 6 9' ' B6 9	6 9
+' B A .  6 9	6 9
+' B A . 6 9	6 9
+' B A . - 9 . - 9. 6 96 9
+' B6 9- -  9) %- 9#)  B A0 0 0 - -  .	 - - !.
+ 1 -   BK   ��������	�
+����vector3
+vmathscrollarea_baryset_sizeybox1/boxscrollarea	maskget_nodeget_sizeguiacquire_input_focus.	postmsg	timeosrandomseed	math
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+m s b bh bm sbx d_num l_num view_num next_view prev_view scok init_add_box self  O � J��6  ' B X�9  X�6 -  BX�6 96
+ 9
+
+ - &B
+99B  X	�6	 '
+
+ 6  B&
+
+BER�6 -  BX!�6 9
+ - &
+
+B6	 9		 99B	 	 X
+
+�6	 9		 ' *  6 9* B	X		�6	 9		 ' * 6 9* B	ER�K    EASING_OUTQUADgocolor.wanimatescreen_yscreen_xtostring	push
+printyxget_nodepick_nodeguiipairsreleased
+touch	hash͙���̙���̙������̙����				
+
+
+
+
+
+		box list_box self  Kaction_id  Kaction  K  i p  $ $ $i !p  !ob  � n��2-    Xj�- '    9  3	 B=  6 ' B X �9  X�6 96 9' B9	9
+B  X�-   BX�6 96 9' B9	9
+B  X�-   B6 ' B X�9  X�6 9' ' B6 ' B X�9  X�6 - BX
+�6 96
+ 9
+
+ - &B
++ BER�6 ' B X�9  X�6 - BX
+�6 96
+ 9
+
+ - &B
++ BER�K  �!���� �	keyxset_enabledipairs	keyztoggle_profile@system:	postmsg
+spaceremoveyxaddget_nodepick_nodeguipressed
+touch	hash scrollarea   $$$$$$$$%%%%%''''''''(((())))))))))((,,,,,,,,----..........--2scok sc box list_box add_box remove_box self  oaction_id  oaction  oI  i 
+p  
+  i 
+p  
+ � #  )� �,  )  )�) ,	 ) ) 4  +  '  5 5 +  4  + 4 5 >5 >5 >3 3 7 3	 3
+ 3 3 3 3 3 3 3  3! 3" 7" 3" 7" 2  �K  on_input 	init           isenabled    c_chan  
+b_kun)3s  
+a_san	  
+/NAME/HP/SP
+/LUCK	/ATK	/DEX	/AGI
+/rank	/EXP/EXP_max/listID  /picture/team_icon/element_icon	/box               $ $ % % & & ' 3 > 8 M V c � � � � � b}g����m (s  (ks  (b  (bh  (bm  (visb 'invisb &sbx %view_num $next_view  $prev_view  $box_num #visible_box "box !l_num  list_box list_texture list_text d_num listdata scok paradata para safe_get_node hit_test write allwrite box_move scrolling 
+init_add_box 	add_box remove_box sc   " 
